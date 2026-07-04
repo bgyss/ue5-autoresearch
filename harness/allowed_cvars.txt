@@ -1,0 +1,42 @@
+# Allow-list of cvars the proposer may set in config/candidate.cvars.
+# One key per line. evaluate.py rejects any candidate line whose key is not
+# listed here — this is what stops a hallucinated/garbage cvar from silently
+# no-op'ing (or worse) in the benchmark.
+#
+# Scalability groups (0=low .. 3/4=cinematic; see Engine's BaseScalability.ini)
+sg.ShadowQuality
+sg.GlobalIlluminationQuality
+sg.ReflectionQuality
+sg.PostProcessQuality
+sg.TextureQuality
+sg.EffectsQuality
+sg.FoliageQuality
+sg.ViewDistanceQuality
+sg.AntiAliasingQuality
+
+# Screen-percentage / upscaling (biggest single frame-time lever)
+r.ScreenPercentage
+r.AntiAliasingMethod
+r.TSR.History.ScreenPercentage
+r.TSR.ShadingRejection.Flickering
+
+# Shadows
+r.Shadow.MaxResolution
+r.Shadow.CSM.MaxCascades
+r.ShadowQuality
+
+# Lumen (software ray-traced only on Apple Silicon)
+r.Lumen.GlobalIllumination.Quality
+r.Lumen.Reflections.Quality
+r.Lumen.ScreenProbeGather.ScreenTraces
+
+# Post-process
+r.MotionBlurQuality
+r.DepthOfFieldQuality
+r.BloomQuality
+r.Tonemapper.Quality
+
+# View distance / LOD
+r.ViewDistanceScale
+r.SkeletalMeshLODBias
+r.StaticMeshLODDistanceScale

@@ -1,0 +1,19 @@
+# Frozen Epic/High reference config. Never edited by the loop.
+# evaluate.py can diff a candidate against this, and it's the config used to
+# capture reference/ref_pose01.png (the max-quality screenshot quality is
+# measured against).
+r.ScreenPercentage=100
+r.AntiAliasingMethod=2
+sg.ShadowQuality=3
+sg.GlobalIlluminationQuality=3
+sg.ReflectionQuality=3
+sg.PostProcessQuality=3
+sg.TextureQuality=3
+sg.EffectsQuality=3
+sg.FoliageQuality=3
+sg.ViewDistanceQuality=3
+sg.AntiAliasingQuality=3
+r.Shadow.MaxResolution=2048
+r.Lumen.GlobalIllumination.Quality=3
+r.Lumen.Reflections.Quality=3
+r.ViewDistanceScale=1.0
