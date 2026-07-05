@@ -2,7 +2,7 @@
 # One cvar per line, KEY=VALUE. Every key must be on the allow-list in
 # harness/allowed_cvars.txt. Starts as a copy of config/baseline.cvars
 # (frozen Epic/High reference).
-r.ScreenPercentage=100
+r.ScreenPercentage=85
 r.AntiAliasingMethod=2
 sg.ShadowQuality=3
 sg.GlobalIlluminationQuality=3
