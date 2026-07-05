@@ -1,5 +1,9 @@
 # ue5-autoresearch
 
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
+[![Managed with uv](https://img.shields.io/badge/managed%20with-uv-de5fe9.svg)](https://github.com/astral-sh/uv)
+[![Dev environment: Nix flake](https://img.shields.io/badge/dev%20env-nix%20flake-5277C3.svg)](https://nixos.org/)
+
 Applying **Karpathy-style autonomous research loops** to **Unreal Engine 5 graphics
 optimization** — an agent that iteratively proposes rendering-config changes, benchmarks
 them, keeps what's faster (without wrecking visual quality), and repeats.
