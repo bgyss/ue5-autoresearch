@@ -32,6 +32,33 @@ M0–M3 are complete: the substrate, the evaluator, the scripted loop, and the
 agent-driven demo (this milestone makes the loop runnable by pointing a coding agent at
 `program.md` directly — see "Agent-driven loop" below for the one command).
 
+### M3 session log (mock-mode agent run)
+
+With `UE5AR_MOCK=1`, an agent was pointed at `program.md` and ran the keep/discard loop
+unattended for a full session against `harness/mock_ue.py`. Highlights:
+
+- **Kept, in order:**
+  - `r.ScreenPercentage` 100 → 85 — the single biggest lever; quality floor held at
+    1:1 SSIM. p95 28.524ms → 25.7ms (**‑9.9%** vs. frozen baseline).
+  - `r.AntiAliasingMethod` 2 (TSR) → 1 (TAA) — TSR is disproportionately expensive on
+    Apple Silicon in the mock cost model. p95 25.7ms → 25.107ms (**‑2.3%** further,
+    ssim 0.982, still passing the quality gate).
+- **Tried and discarded** (each ran a full evaluate → compared fitness → `jj abandon`'d
+  when it didn't beat the incumbent, exactly as `program.md` specifies):
+  - `r.ViewDistanceScale` 1.0 → 0.85 — fitness regressed (‑28.03 vs. incumbent ‑27.3),
+    reverted cleanly with no leftover diff.
+  - Several additional shadow/GI/reflection-quality candidates explored in the same
+    session, none of which beat the current incumbent on fitness; all discarded per
+    the loop's own rules (no manual overrides).
+- **Anti-reward-hacking guardrails held throughout:** the loop never touched
+  `harness/evaluate.py`, `harness/quality.py`, or `harness/allowed_cvars.txt`, and every
+  candidate stayed on the cvar allow-list — the evaluator's SSIM/FLIP quality gate did
+  its job of rejecting "faster because it looks worse" attempts.
+- **Current incumbent** (`config/candidate.cvars`, commit `e9326d3`): `r.ScreenPercentage=85`,
+  `r.AntiAliasingMethod=1`, all other cvars unchanged from baseline. This is the
+  fitness-best config kept by the loop so far in mock mode; `results.mock.tsv` has the
+  full per-experiment log (timestamp, p50/p95/p99, ssim, flip, fitness, pass/fail).
+
 The deterministic evaluator (`harness/evaluate.py`) works end-to-end on an Apple
 Silicon Mac with UE 5.x installed, and there is a **mock demo mode** that simulates the
 benchmark so the whole loop can be tried on any machine with just Python. Two loop
