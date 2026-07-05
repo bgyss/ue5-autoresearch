@@ -28,6 +28,9 @@ fitness score that rewards lower frame time while penalizing visual-quality loss
 
 ## Project state
 
+M2 (scripted loop + mock demo mode) is complete. **M3 work will resume when GPT-5.6 is
+released (expected later this week, July 2026).**
+
 The deterministic evaluator (`harness/evaluate.py`) works end-to-end on an Apple
 Silicon Mac with UE 5.x installed, and there is a **mock demo mode** that simulates the
 benchmark so the whole loop can be tried on any machine with just Python. Two loop
