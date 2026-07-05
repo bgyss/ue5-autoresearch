@@ -61,7 +61,9 @@ DEFAULT_API_KEY = os.environ.get("LLM_API_KEY", "")
 
 IMPROVEMENT_PCT = 2.0  # keep only if p95 improved by > this over incumbent
 RESULTS_HISTORY = 8  # recent result rows to show the model
-TIMEOUT = 120  # seconds for LLM response
+# Seconds to wait for the LLM response. First request may include model
+# load time (tens of GB from disk), so the default is generous.
+TIMEOUT = float(os.environ.get("LLM_TIMEOUT", "300"))
 
 
 class ProposeError(Exception):
@@ -250,6 +252,10 @@ def chat_completion(
         ],
         "temperature": 0.6,
         "stream": False,
+        "max_tokens": 1024,
+        # Ask reasoning/"thinking" models (e.g. Qwen3) to answer directly;
+        # servers that don't know this field ignore it.
+        "chat_template_kwargs": {"enable_thinking": False},
     }
     if model:
         payload["model"] = model
@@ -268,15 +274,29 @@ def chat_completion(
         raise ProposeError(f"LLM HTTP {e.code}: {body[:500]}") from e
     except urllib.error.URLError as e:
         raise ProposeError(f"LLM connection failed: {e.reason}") from e
+    except (TimeoutError, OSError) as e:
+        raise ProposeError(
+            f"LLM request timed out/failed after {TIMEOUT}s: {e} "
+            f"(raise LLM_TIMEOUT if the model is still loading)"
+        ) from e
 
     if "error" in response:
         raise ProposeError(f"LLM returned error: {response['error']}")
     try:
-        return response["choices"][0]["message"]["content"]
+        message = response["choices"][0]["message"]
     except (KeyError, IndexError) as e:
         raise ProposeError(
             f"unexpected LLM response shape: {response}"
         ) from e
+    content = message.get("content") or ""
+    if not content.strip():
+        # Thinking models sometimes spend the whole budget reasoning and
+        # leave content empty; the KEY=VALUE lines often appear in the
+        # reasoning text, so fall back to parsing that.
+        content = message.get("reasoning_content") or ""
+    if not content.strip():
+        raise ProposeError("LLM returned an empty response")
+    return content
 
 
 def git_rev_parse_head() -> str:
@@ -288,6 +308,28 @@ def git_rev_parse_head() -> str:
         check=True,
     )
     return result.stdout.strip()
+
+
+def git_unrelated_dirty_paths() -> list[str]:
+    """Uncommitted paths other than candidate.cvars. The loop's
+    `git reset --hard` would silently destroy them, so refuse to start
+    while any exist."""
+    result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    candidate_rel = str(CANDIDATE_CVARS.relative_to(REPO_ROOT))
+    dirty = []
+    for line in result.stdout.splitlines():
+        status, path = line[:2], line[3:].strip()
+        if status == "??":
+            continue  # untracked files survive git reset --hard
+        if path and path != candidate_rel:
+            dirty.append(path)
+    return dirty
 
 
 def git_has_changes() -> bool:
@@ -392,6 +434,10 @@ def run_one_iteration(
         }
 
     git_commit("exp: scripted LLM proposal")
+    # Incumbent must be captured BEFORE evaluate.py appends the new row,
+    # otherwise the new run is compared against itself and the >2% noise
+    # gate silently never applies.
+    incumbent = best_p95_so_far()
     ok, metrics = run_evaluate()
     passed = metrics.get("passed", False)
     p95_ms = metrics.get("p95_ms", float("inf"))
@@ -408,22 +454,22 @@ def run_one_iteration(
         )
         git_reset_to(baseline)
         action = "reset_rejected"
+    elif incumbent == float("inf"):
+        print(f"KEEP p95={p95_ms}ms (first passing result).")
+        action = "keep"
+    elif p95_ms < incumbent * (1 - IMPROVEMENT_PCT / 100):
+        print(
+            f"KEEP p95={p95_ms}ms (>{IMPROVEMENT_PCT}% better than "
+            f"{incumbent}ms)."
+        )
+        action = "keep"
     else:
-        best = best_p95_so_far()
-        # best includes the row just appended by evaluate.py.
-        if best == p95_ms:
-            print(f"KEEP p95={p95_ms}ms (first passing result).")
-            action = "keep"
-        elif p95_ms < best * (1 - IMPROVEMENT_PCT / 100):
-            print(f"KEEP p95={p95_ms}ms (>{IMPROVEMENT_PCT}% improvement).")
-            action = "keep"
-        else:
-            print(
-                f"RESET p95={p95_ms}ms not >{IMPROVEMENT_PCT}% better "
-                f"than {best}ms; resetting."
-            )
-            git_reset_to(baseline)
-            action = "reset_noise"
+        print(
+            f"RESET p95={p95_ms}ms not >{IMPROVEMENT_PCT}% better "
+            f"than {incumbent}ms; resetting."
+        )
+        git_reset_to(baseline)
+        action = "reset_noise"
 
     return {
         "action": action,
@@ -480,6 +526,14 @@ def main() -> None:
     allowed = load_allowed_cvars()
     if not allowed:
         sys.exit(f"allow-list empty: {ALLOWED_CVARS}")
+
+    dirty = git_unrelated_dirty_paths()
+    if dirty and not args.dry_run:
+        sys.exit(
+            "refusing to run: uncommitted changes outside "
+            f"config/candidate.cvars would be destroyed by the loop's "
+            f"`git reset --hard`: {dirty}\nCommit or stash them first."
+        )
 
     if args.dry_run:
         run_one_iteration(
