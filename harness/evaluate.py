@@ -22,11 +22,13 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+import mock_ue  # noqa: E402
 import parse_csv  # noqa: E402
 import quality  # noqa: E402
 
@@ -84,8 +86,13 @@ def validate_cvars(cvars: dict[str, str], allowed: set[str]) -> None:
 
 def cvars_to_exec_cmds(cvars: dict[str, str]) -> str:
     """Render validated cvars as a single -ExecCmds string, plus the fixed
-    screenshot command run_ue.py's caller appends at a pinned frame."""
-    return ",".join(f"{k}={v}" for k, v in cvars.items())
+    screenshot command run_ue.py's caller appends at a pinned frame.
+
+    NOTE: UE's exec path treats "key=value" as one unknown token and silently
+    ignores it; console cvar sets must be space-separated ("key value").
+    Verified in harness/_last_run/ue.log: all "=" commands no-op'd while the
+    space-form commands (HighResShot, CsvProfile) in the same string ran."""
+    return ",".join(f"{k} {v}" for k, v in cvars.items())
 
 
 def run_benchmark(exec_cmds: str, out_dir: Path) -> tuple[Path, Path]:
@@ -137,25 +144,43 @@ def append_result_row(row: dict) -> None:
         "fitness",
         "passed",
     ]
-    is_new = not RESULTS_TSV.exists()
-    with RESULTS_TSV.open("a") as f:
+    out = results_path()
+    is_new = not out.exists()
+    with out.open("a") as f:
         if is_new:
             f.write("\t".join(header) + "\n")
         f.write("\t".join(str(row[k]) for k in header) + "\n")
+
+
+def results_path() -> Path:
+    """Mock runs log to results.mock.tsv so demo output never contaminates
+    the real benchmark history in results.tsv."""
+    return REPO_ROOT / ("results.mock.tsv" if mock_enabled() else "results.tsv")
+
+
+def mock_enabled() -> bool:
+    """Demo mode: simulate the benchmark without UE5 (see harness/mock_ue.py).
+    Enabled via UE5AR_MOCK=1 so it propagates through subprocesses
+    (propose.py -> evaluate.py -> here) without extra plumbing."""
+    return os.environ.get("UE5AR_MOCK", "") not in ("", "0")
 
 
 def evaluate(cvars_path: Path) -> dict:
     allowed = load_allowed_cvars()
     cvars = parse_cvars_file(cvars_path)
     validate_cvars(cvars, allowed)
-    exec_cmds = cvars_to_exec_cmds(cvars)
 
-    out_dir = REPO_ROOT / "harness" / "_last_run"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    csv_path, screenshot_path = run_benchmark(exec_cmds, out_dir)
-
-    frame_stats = parse_csv.frame_time_percentiles(csv_path, warmup_frames=WARMUP_FRAMES)
-    quality_stats = quality.compare(screenshot_path, REFERENCE_IMAGE)
+    if mock_enabled():
+        frame_stats, quality_stats = mock_ue.simulate(cvars)
+    else:
+        exec_cmds = cvars_to_exec_cmds(cvars)
+        out_dir = REPO_ROOT / "harness" / "_last_run"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        csv_path, screenshot_path = run_benchmark(exec_cmds, out_dir)
+        frame_stats = parse_csv.frame_time_percentiles(
+            csv_path, warmup_frames=WARMUP_FRAMES
+        )
+        quality_stats = quality.compare(screenshot_path, REFERENCE_IMAGE)
 
     fitness, passed = compute_fitness(
         frame_stats["p95_ms"], quality_stats["ssim"], quality_stats["flip"]
@@ -182,7 +207,15 @@ def main() -> None:
         default=str(REPO_ROOT / "config" / "candidate.cvars"),
         help="path to the cvars file to evaluate (default: config/candidate.cvars)",
     )
+    parser.add_argument(
+        "--mock",
+        action="store_true",
+        help="demo mode: simulate the benchmark without launching UE5 "
+        "(same as UE5AR_MOCK=1)",
+    )
     args = parser.parse_args()
+    if args.mock:
+        os.environ["UE5AR_MOCK"] = "1"
 
     try:
         row = evaluate(Path(args.cvars))

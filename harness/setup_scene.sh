@@ -4,7 +4,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-UE_ROOT="/Users/Shared/Epic Games/UE_5.7"
+UE_ROOT="${UE_ROOT:-/Users/Shared/Epic Games/UE_5.7}"
 EDITOR_CMD="$UE_ROOT/Engine/Binaries/Mac/UnrealEditor-Cmd"
 UPROJECT="$REPO_ROOT/ue_project/UE5AutoResearch.uproject"
 SCRIPT="$REPO_ROOT/ue_project/Content/Python/build_scene.py"

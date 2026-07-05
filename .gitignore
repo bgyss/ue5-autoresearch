@@ -1,0 +1,36 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Nix
+result
+result-*
+
+# IDE
+.claude/
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Tool caches
+.direnv/
+.ruff_cache/
+.mise/
+
+# Project outputs (keep in workspace, not in VCS)
+harness/_*
+results.tsv
+results.mock.tsv
+*.log
+
+# Unreal Engine transient dirs
+ue_project/Saved/
+ue_project/Intermediate/
+ue_project/DerivedDataCache/
+ue_project/Binaries/
+ue_project/Build/

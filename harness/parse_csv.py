@@ -34,7 +34,10 @@ def load_csv_stats(path: str | Path) -> dict[str, list[float]]:
     series: dict[str, list[float]] = {name: [] for name in header if name}
 
     for row in rows[1:]:
-        if not row or not row[0]:
+        # Skip only fully-empty rows. Real captures have an unnamed first
+        # column whose cells are empty on every data row, so testing row[0]
+        # alone would silently discard the entire file.
+        if not row or not any(cell.strip() for cell in row):
             continue
         for name, cell in zip(header, row):
             if not name:
@@ -82,7 +85,10 @@ def frame_time_percentiles(
     UE's CSV frame-time stats are already in milliseconds.
     """
     series = load_csv_stats(csv_path)
-    gpu_ms = find_stat(series, "GPU/Total", "GPUTotal", "GPU", "FrameTime_GPU")
+    # NB: do not pass a bare "GPU" candidate — substring matching would hit
+    # unrelated stats (e.g. "LevelStreaming/NumLevelsPendinGPUrge") and
+    # silently report a zero-filled column as frame time.
+    gpu_ms = find_stat(series, "GPU/Total", "GPUTotal", "FrameTime_GPU")
     if not gpu_ms:
         # Fall back to overall frame time if GPU-specific stat is absent
         # (e.g. -csvGpuStats wasn't picked up); better a number than a crash.

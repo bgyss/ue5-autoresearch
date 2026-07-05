@@ -1,7 +1,7 @@
-# Frozen Epic/High reference config. Never edited by the loop.
-# evaluate.py can diff a candidate against this, and it's the config used to
-# capture reference/ref_pose01.png (the max-quality screenshot quality is
-# measured against).
+# THE GENOME — the only file the optimization loop may edit.
+# One cvar per line, KEY=VALUE. Every key must be on the allow-list in
+# harness/allowed_cvars.txt. Starts as a copy of config/baseline.cvars
+# (frozen Epic/High reference).
 r.ScreenPercentage=100
 r.AntiAliasingMethod=2
 sg.ShadowQuality=3

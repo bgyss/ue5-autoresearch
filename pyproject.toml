@@ -1,0 +1,33 @@
+[project]
+name = "ue5-autoresearch"
+version = "0.1.0"
+description = "Karpathy-style autoresearch loop for UE5 rendering optimization"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=1.24.0",
+    "scipy>=1.10.0",
+    "pillow>=9.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.6.0",
+]
+
+[tool.uv]
+managed = true
+package = false
+
+[tool.uv.pip]
+python-version = "3.12"
+
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+ignore = ["E501", "N806"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"

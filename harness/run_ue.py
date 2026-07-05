@@ -15,7 +15,6 @@ import argparse
 import os
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).parent.parent
@@ -26,22 +25,43 @@ MAP = "/Game/Maps/BenchmarkScene"
 
 CSV_CAPTURE_FRAMES = 3000
 RESOLUTION = (1920, 1080)
+# HighResShot requested via ExecCmds fires at map-load (frame ~0) and captures
+# a black frame before streaming/lighting settle. r.HighResScreenshotDelay
+# (UnrealClient.cpp:1551) defers the actual capture by N frames after the
+# request, so the shot lands ~frame 300 with the scene fully rendered.
+SCREENSHOT_DELAY_FRAMES = 300
 SCREENSHOT_FRAME_HINT = "HighResShot 1920x1080"
 
 
-def build_exec_cmds(cvars_exec_cmds: str) -> str:
+def build_exec_cmds(cvars_exec_cmds: str, frames: int) -> str:
     """cvars_exec_cmds is a comma-separated KEY=VALUE list (already validated
-    by evaluate.py). Append the fixed screenshot command; nothing here is
-    agent-controlled beyond the cvar values themselves."""
+    by evaluate.py). Append the fixed screenshot command and the CSV capture
+    trigger; nothing here is agent-controlled beyond the cvar values
+    themselves.
+
+    CSV capture MUST start via ExecCmds (post-startup), not via the
+    -csvcaptureframes command-line flag: on Mac/Metal that flag begins the
+    capture before the RHI is initialized and trips
+    `Assertion failed: GRHIGlobals.IsRHIInitialized` (RenderUtils.cpp:1789).
+    Verified by flag bisection in M0 (harness/_bisect_*.log)."""
     parts = [p for p in cvars_exec_cmds.split(",") if p]
+    parts.append(f"r.HighResScreenshotDelay {SCREENSHOT_DELAY_FRAMES}")
     parts.append(SCREENSHOT_FRAME_HINT)
+    parts.append(f"CsvProfile Frames={frames}")
     return ",".join(parts)
 
 
-def run(exec_cmds: str, out_dir: Path) -> None:
+def run(exec_cmds: str, out_dir: Path, frames: int = CSV_CAPTURE_FRAMES,
+        timeout: int = 900) -> None:
+    out_dir = out_dir.resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
-    csv_dir = out_dir / "csv_raw"
-    csv_dir.mkdir(exist_ok=True)
+    # ExecCmds-triggered CsvProfile ignores -csvoutputdirectory and always
+    # writes to the project's Saved/Profiling/CSV; clear stale files so
+    # _collect_output can't pick up a CSV from a previous run.
+    csv_dir = REPO_ROOT / "ue_project" / "Saved" / "Profiling" / "CSV"
+    if csv_dir.exists():
+        for stale in csv_dir.glob("*.csv"):
+            stale.unlink()
 
     cmd = [
         EDITOR_CMD,
@@ -55,21 +75,41 @@ def run(exec_cmds: str, out_dir: Path) -> None:
         "-nosplash",
         "-noscreenmessages",
         "-novsync",
-        f"-csvcaptureframes={CSV_CAPTURE_FRAMES}",
         "-csvGpuStats",
         "-ExitAfterCsvProfiling",
         f"-resx={RESOLUTION[0]}",
         f"-resy={RESOLUTION[1]}",
         "-forceres",
         "-windowed",
-        f"-ExecCmds={build_exec_cmds(exec_cmds)}",
-        f"-csvoutputdirectory={csv_dir}",
+        f"-ExecCmds={build_exec_cmds(exec_cmds, frames)}",
         "-log",
+        # Keep the full UE log alongside the run outputs; stdout only carries
+        # the UnrealTraceServer fork chatter, not the engine log.
+        f"-abslog={out_dir / 'ue.log'}",
+        # Disable the UE trace system entirely. Without this, UE auto-spawns
+        # a detached "UnrealTraceServer" grandchild process that inherits our
+        # stdout/stderr pipe fds. That grandchild keeps the write end of the
+        # pipes open even after UnrealEditor-Cmd itself exits, so
+        # subprocess.run(..., capture_output=True) below never sees EOF and
+        # hangs forever (observed as a zombie UnrealEditor-Cmd + orphaned
+        # UnrealTraceServer still holding the pipes). See M0 diagnosis.
+        "-trace=",
     ]
 
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=580)
+    # Write UE output straight to a file instead of PIPEs: even with -trace=,
+    # any detached grandchild inheriting a pipe fd would stall
+    # communicate()-style reads forever. A plain file has no EOF problem and
+    # lets us tail progress while the benchmark runs.
     log_path = out_dir / "run.log"
-    log_path.write_text(result.stdout + "\n" + result.stderr)
+    with open(log_path, "w") as log_f:
+        try:
+            result = subprocess.run(
+                cmd, stdout=log_f, stderr=subprocess.STDOUT, timeout=timeout
+            )
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(
+                f"UnrealEditor-Cmd timed out after {timeout}s; see {log_path}"
+            )
     if result.returncode != 0:
         raise RuntimeError(
             f"UnrealEditor-Cmd exited {result.returncode}; see {log_path}"
@@ -99,8 +139,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--exec-cmds", required=True, help="comma-separated KEY=VALUE cvars")
     parser.add_argument("--out-dir", required=True)
+    parser.add_argument("--frames", type=int, default=CSV_CAPTURE_FRAMES)
+    parser.add_argument("--timeout", type=int, default=900)
     args = parser.parse_args()
-    run(args.exec_cmds, Path(args.out_dir))
+    run(args.exec_cmds, Path(args.out_dir), frames=args.frames, timeout=args.timeout)
 
 
 if __name__ == "__main__":
