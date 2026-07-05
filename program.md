@@ -16,9 +16,10 @@ meaningfully worse**, one small change at a time, forever, without asking permis
 1. Read the in-scope files for context: `README.md`, `harness/allowed_cvars.txt`,
    `config/baseline.cvars`, `config/candidate.cvars`, and the recent rows of
    `results.tsv` if it exists.
-2. Create and switch to a dedicated experiment branch, e.g.
-   `git checkout -b autoresearch/<date>`. The branch always points at the
-   best-so-far config; discarded experiments are rolled back.
+2. This repo is versioned with **jujutsu (`jj`)**, colocated with git — use `jj`, not raw
+   `git`, for every step below. Start a fresh working-copy change for the session:
+   `jj new -m "autoresearch session <date>"`. Each experiment becomes its own change on
+   top of this; discarded experiments are abandoned, kept ones stay in history.
 3. If there is no passing baseline row in `results.tsv` yet, run
    `python harness/evaluate.py > eval.log 2>&1` once on the unmodified
    candidate to establish it.
@@ -31,13 +32,17 @@ Everything else in this program is unchanged.
 
 1. Edit `config/candidate.cvars` (change a few related cvars — a hypothesis, not a
    scattershot).
-2. `git add config/candidate.cvars && git commit -m "exp: <one-line hypothesis>"`.
-3. Run: `python harness/evaluate.py > eval.log 2>&1` (this launches the deterministic
+2. Run: `python harness/evaluate.py > eval.log 2>&1` (this launches the deterministic
    benchmark, parses the CSV, captures + scores the screenshot, and appends a row to
    `results.tsv`). Redirect output — do not let benchmark logs flood your context.
-4. Read the last row of `results.tsv`: `p50_ms p95_ms p99_ms ssim flip fitness passed`.
+3. Read the last row of `results.tsv`: `p50_ms p95_ms p99_ms ssim flip fitness passed`.
    `results.tsv` is deliberately untracked by git — never commit it; it must survive
    resets so the experiment log is append-only across kept *and* discarded runs.
+4. Decide keep or discard (below), *then* record the change: `jj describe -m "exp:
+   <one-line hypothesis> (p95=X ssim=Y)"` if kept, or `jj abandon @` if discarded (this
+   both records nothing and reverts `config/candidate.cvars` in one step, since the
+   working-copy change *is* the edit). Either way, follow up with `jj new` to start the
+   next experiment on a clean working copy.
 
 ## The objective (do not try to redefine it — the scorer is fixed)
 

@@ -23,13 +23,14 @@ fitness score that rewards lower frame time while penalizing visual-quality loss
 | `train.py` (mutable "genome") | `config/candidate.cvars` | **the only file the loop edits** |
 | `prepare.py` (fixed evaluator) | `harness/evaluate.py` | **read-only to the loop** (no reward hacking) |
 | `val_bpb` (one number) | `fitness` = frame-time reward + quality penalty | — |
-| git branch hill-climb | same (`autoresearch/<date>` branch, revert on regression) | — |
+| git branch hill-climb | same, via `jj` (colocated with git): `jj describe`/`jj new` to keep, `jj abandon` to revert | — |
 | `results.tsv` (untracked, append-only) | same | — |
 
 ## Project state
 
-M2 (scripted loop + mock demo mode) is complete. **M3 work will resume when GPT-5.6 is
-released (expected later this week, July 2026).**
+M0–M3 are complete: the substrate, the evaluator, the scripted loop, and the
+agent-driven demo (this milestone makes the loop runnable by pointing a coding agent at
+`program.md` directly — see "Agent-driven loop" below for the one command).
 
 The deterministic evaluator (`harness/evaluate.py`) works end-to-end on an Apple
 Silicon Mac with UE 5.x installed, and there is a **mock demo mode** that simulates the
@@ -39,8 +40,8 @@ drivers are available:
 - **Script-driven:** `python harness/propose.py` calls a local LLM (llama.cpp, Ollama,
   or any OpenAI-compatible server) to edit `config/candidate.cvars`, runs the evaluator,
   and keeps the commit only if p95 improved by >2% over the current best.
-- **Agent-driven (the autoresearch way):** open the workspace in a coding agent (Claude
-  Code, etc.) and point it at `program.md`; it edits `config/candidate.cvars`, runs
+- **Agent-driven (the autoresearch way):** point a coding agent at `program.md` with a
+  single command (no `propose.py`); it edits `config/candidate.cvars`, runs
   `python harness/evaluate.py`, keeps/discards per `program.md`, and repeats.
 
 ## Layout
@@ -144,21 +145,33 @@ stopping or unloading the model server externally.
 
 ### Agent-driven loop (the autoresearch way)
 
-Open the workspace in a coding agent and tell it:
-
-> Follow `program.md` and optimize `config/candidate.cvars`. Run `python
-> harness/evaluate.py` after each change, read the new row in `results.tsv`, keep the
-> commit only if p95 improved by >2% while passing the SSIM/FLIP gate, and repeat.
-
-Or, from the Claude Code CLI:
+This is M3: no `propose.py`, no wrapper script — point a coding agent straight at
+`program.md` and let it drive the whole loop (edit cvars, run the evaluator, keep or
+discard, repeat) unattended. **The one command to start it** (from the repo root, with
+Claude Code installed):
 
 ```bash
-claude
-# then: "Follow program.md and run the optimization loop."
+claude --dangerously-skip-permissions -p "$(cat program.md)"
+```
+
+`-p` runs Claude Code non-interactively so it keeps working through many tool calls in
+one invocation instead of stopping to ask; `--dangerously-skip-permissions` matches
+`program.md`'s own "NEVER STOP... do not ask for confirmation" rule. Only run it with
+`--dangerously-skip-permissions` in a sandboxed/disposable environment — the agent will
+be running shell commands unattended for as long as you let it.
+
+For a first dry run with no UE5 required, set `UE5AR_MOCK=1` first so every
+`harness/evaluate.py` call in the loop uses the simulated benchmark and logs to
+`results.mock.tsv` instead of touching real benchmark history:
+
+```bash
+UE5AR_MOCK=1 claude --dangerously-skip-permissions -p "$(cat program.md)"
 ```
 
 As in autoresearch, `program.md` is the file the *human* iterates on between sessions;
-the agent iterates on `config/candidate.cvars`.
+the agent iterates on `config/candidate.cvars`. Version control for the loop's
+keep/discard cycle is `jj` (see `program.md`'s "How to run one experiment" section),
+colocated with git in this repo.
 
 ## Documents (read in order)
 
