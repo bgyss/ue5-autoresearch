@@ -576,7 +576,8 @@ def main() -> None:
     if results_tsv().exists():
         print(results_tsv().read_text())
     best_p95 = best_p95_so_far()
-    print(f"\nBest passing p95_ms: {best_p95}")
+    print(f"\nBest observed passing p95_ms: {best_p95}")
+    print(f"Kept incumbent p95_ms: {incumbent}")
     if best_p95 != float("inf"):
         print("\n=== best diff vs baseline.cvars ===")
         subprocess.run(
