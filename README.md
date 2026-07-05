@@ -218,6 +218,11 @@ colocated with git in this repo.
 4. [`docs/04-goal-prompt.md`](docs/04-goal-prompt.md) — the deliverable you asked for: a
    **build prompt** to hand a coding agent to scaffold the toy, and the **`program.md`**
    the optimization loop itself will run on.
+5. [`docs/05-goal-prompt-multi-facet.md`](docs/05-goal-prompt-multi-facet.md) — the next
+   goal prompt: scale the single loop into a **multi-facet fleet** (island-model parallel
+   agents, one per rendering-cost facet) with benchmarks running on the local Mac *and*
+   cloud GPU workers in parallel, all feeding **one single source of truth** (central
+   queue + append-only ledger on a coordinator host).
 
 ## TL;DR viability
 
