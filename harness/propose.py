@@ -401,8 +401,13 @@ def run_one_iteration(
     api_key: str,
     dry_run: bool,
     allowed: set[str],
+    incumbent: float = float("inf"),
 ) -> dict[str, Any]:
-    """Single propose -> evaluate -> keep/discard cycle."""
+    """Single propose -> evaluate -> keep/discard cycle.
+
+    incumbent is the p95_ms of the config the branch currently points at
+    (inf if none) — only *kept* runs may move it, so a fast-but-discarded
+    run can't ratchet the bar down and block legitimate keeps."""
     baseline = git_rev_parse_head()
     program = load_program()
     candidate = load_candidate()
@@ -434,10 +439,6 @@ def run_one_iteration(
         }
 
     git_commit("exp: scripted LLM proposal")
-    # Incumbent must be captured BEFORE evaluate.py appends the new row,
-    # otherwise the new run is compared against itself and the >2% noise
-    # gate silently never applies.
-    incumbent = best_p95_so_far()
     ok, metrics = run_evaluate()
     passed = metrics.get("passed", False)
     p95_ms = metrics.get("p95_ms", float("inf"))
@@ -545,16 +546,22 @@ def main() -> None:
         )
         return
 
+    # Seed the incumbent from history (best passing run so far); after that
+    # only kept runs update it.
+    incumbent = best_p95_so_far()
     for i in range(args.iterations):
         print(f"\n=== iteration {i + 1}/{args.iterations} ===")
         try:
-            run_one_iteration(
+            result = run_one_iteration(
                 args.model,
                 args.base_url,
                 args.api_key,
                 dry_run=False,
                 allowed=allowed,
+                incumbent=incumbent,
             )
+            if result["action"] == "keep":
+                incumbent = result["p95_ms"]
         except ProposeError as e:
             print(f"propose error: {e}", file=sys.stderr)
         except subprocess.CalledProcessError as e:
