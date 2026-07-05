@@ -29,9 +29,12 @@ AlphaEvolve).
   scoring function is outside the mutable region. Nothing below changes that invariant.
 
 **The architecture-shaping constraint:** benchmarks must be deterministic and
-comparable. Runs can execute on the local Mac *and* on cloud workers (e.g. GPU VMs with
-a headless UE5 build, provisioned via SkyPilot or plain SSH), but two rules are
-absolute:
+comparable. Runs can execute on the local Mac *and* on cloud workers — preferred:
+**Kubernetes on a managed service (AWS EKS) with GPU node groups**, one benchmark pod
+per GPU node, containerized headless UE5 build, with **Kueue** doing cluster-side job
+queueing/quota and **Karpenter** (or Cluster Autoscaler) scaling GPU nodes to zero when
+the queue is empty; plain GPU VMs via SkyPilot/SSH are the acceptable fallback — but two
+rules are absolute:
 1. **Never two benchmarks on the same GPU at once** — GPU contention destroys
    determinism. One worker per machine; the local Mac is just one worker among several.
 2. **One single source of truth.** All workers report into one central results ledger
@@ -83,10 +86,19 @@ M benchmark workers (local + cloud, one per GPU) → one shared, append-only led
 >    cvar file + facet name; a worker appends the result row (facet, agent id,
 >    `worker_class`, per-pass columns) to the single shared `results.tsv` **on the
 >    coordinator only** — remote workers push results back (rsync/scp/API), they never
->    keep a private ledger. Start with one local worker; then add cloud workers: each is
->    a GPU VM with the same UE build + harness checkout, launched via SkyPilot or a
->    documented SSH bootstrap script, running the identical `worker.py` with its
->    `--worker-class` tag. Enforce: one worker per GPU, ever; the local worker
+>    keep a private ledger. Start with one local worker; then add cloud workers.
+>    **Preferred cloud substrate: Kubernetes on AWS EKS.** Package the headless UE5
+>    build + harness as a container image (ECR); each benchmark worker is a pod
+>    requesting exactly one GPU (`nvidia.com/gpu: 1`) on a GPU node group, running the
+>    identical `worker.py` with its `--worker-class` tag (e.g. `eks-g5-a10g`). Use
+>    **Kueue** for cluster-side admission — one ClusterQueue per worker class with GPU
+>    quota, so the coordinator can flood-submit Jobs and Kueue holds them until a GPU is
+>    free (this *is* rule #1, enforced by the scheduler) — and **Karpenter** to scale
+>    GPU nodes up on demand and back to zero when idle. Coordinator↔cluster bridging
+>    stays simple: a `k8s_submit.py` shim that turns a queue job into a Kueue-managed
+>    K8s Job and streams the result row back. SkyPilot or a documented SSH bootstrap
+>    onto raw GPU VMs remains the fallback for a first spike or non-K8s clouds.
+>    Enforce: one worker per GPU, ever; the local worker
 >    unloads/pauses the local LLM server before each UE run; the queue rejects jobs
 >    whose cvar diff touches keys outside the submitting facet's allow-list slice.
 >    Re-validate determinism (M0 tolerance) **per worker class** before trusting a class.
