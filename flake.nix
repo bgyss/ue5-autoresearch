@@ -32,6 +32,10 @@
           ];
 
           shellHook = ''
+            # Point Xcode tooling at the real Xcode install instead of the
+            # Nix apple-sdk stub, so xcodebuild/xcrun/shader compilation work.
+            export DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
+
             echo "UE5 autoresearch dev shell"
             echo "  mise install      # install pinned python/uv"
             echo "  uv sync           # install python deps"
