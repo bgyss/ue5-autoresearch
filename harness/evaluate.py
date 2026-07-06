@@ -34,7 +34,11 @@ import quality  # noqa: E402
 
 REPO_ROOT = Path(__file__).parent.parent
 ALLOWED_CVARS_PATH = REPO_ROOT / "harness" / "allowed_cvars.txt"
-REFERENCE_IMAGE = REPO_ROOT / "reference" / "ref_pose01.png"
+# M4: three reference poses (start/middle/end of the flythrough); quality is
+# gated on the WORST pose so a config can't overfit a single easy viewpoint.
+REFERENCE_IMAGES = tuple(
+    REPO_ROOT / "reference" / f"ref_pose{i:02d}.png" for i in (1, 2, 3)
+)
 RESULTS_TSV = REPO_ROOT / "results.tsv"
 
 # Quality floor. Tune these on the reference scene before turning the loop
@@ -118,12 +122,32 @@ def run_benchmark(exec_cmds: str, out_dir: Path) -> tuple[Path, Path]:
             f"stdout:\n{result.stdout[-4000:]}\nstderr:\n{result.stderr[-4000:]}"
         )
     csv_path = out_dir / "benchmark.csv"
-    screenshot_path = out_dir / "screenshot.png"
     if not csv_path.exists():
         raise RuntimeError(f"run_ue.py did not produce {csv_path}")
-    if not screenshot_path.exists():
-        raise RuntimeError(f"run_ue.py did not produce {screenshot_path}")
-    return csv_path, screenshot_path
+    shots = [out_dir / f"screenshot_pose{i:02d}.png"
+             for i in range(1, len(REFERENCE_IMAGES) + 1)]
+    for shot in shots:
+        if not shot.exists():
+            raise RuntimeError(f"run_ue.py did not produce {shot}")
+    return csv_path, shots
+
+
+def worst_pose_quality(screenshot_paths: list[Path]) -> dict:
+    """Compare each captured pose against its reference and gate on the
+    WORST pose: min ssim, max flip. Per-pose values are kept for logging so
+    a regression on one viewpoint is visible in results.tsv."""
+    per_pose = [
+        quality.compare(shot, ref)
+        for shot, ref in zip(screenshot_paths, REFERENCE_IMAGES, strict=True)
+    ]
+    stats = {
+        "ssim": min(q["ssim"] for q in per_pose),
+        "flip": max(q["flip"] for q in per_pose),
+    }
+    for i, q in enumerate(per_pose, start=1):
+        stats[f"ssim_p{i}"] = q["ssim"]
+        stats[f"flip_p{i}"] = q["flip"]
+    return stats
 
 
 def compute_fitness(p95_ms: float, ssim_score: float, flip_score: float) -> tuple[float, bool]:
@@ -143,8 +167,19 @@ def append_result_row(row: dict) -> None:
         "flip",
         "fitness",
         "passed",
+        *parse_csv.PASS_BUCKETS,
+        *(f"ssim_p{i}" for i in range(1, len(REFERENCE_IMAGES) + 1)),
+        *(f"flip_p{i}" for i in range(1, len(REFERENCE_IMAGES) + 1)),
     ]
     out = results_path()
+    # M4 widened the schema; if an existing file has a different header,
+    # rotate it aside rather than appending misaligned columns.
+    if out.exists():
+        with out.open() as f:
+            existing_header = f.readline().rstrip("\n").split("\t")
+        if existing_header != header:
+            ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+            out.rename(out.with_suffix(f".pre-m4-{ts}.tsv"))
     is_new = not out.exists()
     with out.open("a") as f:
         if is_new:
@@ -172,15 +207,19 @@ def evaluate(cvars_path: Path) -> dict:
 
     if mock_enabled():
         frame_stats, quality_stats = mock_ue.simulate(cvars)
+        pass_stats = {k: frame_stats[k] for k in parse_csv.PASS_BUCKETS}
     else:
         exec_cmds = cvars_to_exec_cmds(cvars)
         out_dir = REPO_ROOT / "harness" / "_last_run"
         out_dir.mkdir(parents=True, exist_ok=True)
-        csv_path, screenshot_path = run_benchmark(exec_cmds, out_dir)
+        csv_path, screenshot_paths = run_benchmark(exec_cmds, out_dir)
         frame_stats = parse_csv.frame_time_percentiles(
             csv_path, warmup_frames=WARMUP_FRAMES
         )
-        quality_stats = quality.compare(screenshot_path, REFERENCE_IMAGE)
+        quality_stats = worst_pose_quality(screenshot_paths)
+        pass_stats = parse_csv.per_pass_percentiles(
+            csv_path, warmup_frames=WARMUP_FRAMES
+        )
 
     fitness, passed = compute_fitness(
         frame_stats["p95_ms"], quality_stats["ssim"], quality_stats["flip"]
@@ -196,6 +235,11 @@ def evaluate(cvars_path: Path) -> dict:
         "fitness": fitness if fitness != float("-inf") else "-inf",
         "passed": passed,
     }
+    for k in parse_csv.PASS_BUCKETS:
+        row[k] = round(pass_stats[k], 3)
+    for i in range(1, len(REFERENCE_IMAGES) + 1):
+        row[f"ssim_p{i}"] = round(quality_stats.get(f"ssim_p{i}", quality_stats["ssim"]), 5)
+        row[f"flip_p{i}"] = round(quality_stats.get(f"flip_p{i}", quality_stats["flip"]), 5)
     append_result_row(row)
     return row
 

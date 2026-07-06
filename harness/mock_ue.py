@@ -124,6 +124,23 @@ def simulate(cvars: dict[str, str], frames: int = 600) -> tuple[dict, dict]:
     """
     mean_ms, damage = _model(cvars)
 
+    # Per-pass split of the frame (M4): rough shares of the modeled cost,
+    # shaped like parse_csv.per_pass_percentiles() output. Shares are chosen
+    # so shadow/GI-heavy cvars move "their" bucket, mirroring the real
+    # render-thread exclusive buckets.
+    sg = lambda k: min(4.0, max(0.0, _f(cvars, k, 3.0)))  # noqa: E731
+    shadow_res = min(4096.0, max(128.0, _f(cvars, "r.Shadow.MaxResolution", 2048.0)))
+    pass_means = {
+        "shadow_ms": SG_COST_MS["sg.ShadowQuality"] * sg("sg.ShadowQuality") / 3.0
+        + 0.8 * (shadow_res / 2048.0),
+        "gi_ms": SG_COST_MS["sg.GlobalIlluminationQuality"]
+        * sg("sg.GlobalIlluminationQuality") / 3.0
+        + 1.2 * min(4.0, max(0.0, _f(cvars, "r.Lumen.GlobalIllumination.Quality", 3.0))) / 3.0,
+        "post_ms": SG_COST_MS["sg.PostProcessQuality"] * sg("sg.PostProcessQuality") / 3.0,
+        "base_ms": BASE_MS * 0.5,
+        "translucency_ms": 0.4 * sg("sg.EffectsQuality") / 3.0,
+    }
+
     # Config-seeded jitter (deterministic per config) + run-to-run noise.
     seed = int.from_bytes(
         hashlib.sha256(repr(sorted(cvars.items())).encode()).digest()[:8], "big"
@@ -150,8 +167,28 @@ def simulate(cvars: dict[str, str], frames: int = 600) -> tuple[dict, dict]:
         "p99_ms": pct(99),
         "n_frames": float(frames),
     }
-    quality_stats = {
-        "ssim": max(0.0, 1.0 - damage),
-        "flip": min(1.0, damage * 2.5),
-    }
+    # Per-pass p95s, shaped like parse_csv.per_pass_percentiles(): the modeled
+    # bucket means scaled by the same drift plus mild config-seeded jitter.
+    for column, base in pass_means.items():
+        frame_stats[column] = max(0.0, base * drift * (1.0 + rng.gauss(0.0, 0.03)))
+
+    # Three poses (M4): pose 1 is the modeled damage; poses 2/3 see slightly
+    # different damage (deterministic per config) so worst-of-3 gating is
+    # exercised in mock mode too.
+    base_ssim = max(0.0, 1.0 - damage)
+    base_flip = min(1.0, damage * 2.5)
+    quality_stats = {}
+    for i in (1, 2, 3):
+        scale = 1.0 + rng.gauss(0.0, 0.04) if i > 1 else 1.0
+        d = min(1.0, max(0.0, damage * scale))
+        quality_stats[f"ssim_p{i}"] = max(0.0, 1.0 - d)
+        quality_stats[f"flip_p{i}"] = min(1.0, d * 2.5)
+    quality_stats["ssim"] = min(
+        quality_stats[f"ssim_p{i}"] for i in (1, 2, 3)
+    )
+    quality_stats["flip"] = max(
+        quality_stats[f"flip_p{i}"] for i in (1, 2, 3)
+    )
+    # Keep pose 1 pinned to the analytic model for test determinism checks.
+    assert quality_stats["ssim_p1"] == base_ssim and quality_stats["flip_p1"] == base_flip
     return frame_stats, quality_stats

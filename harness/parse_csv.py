@@ -77,6 +77,58 @@ def percentile(values: list[float], pct: float) -> float:
     return ordered[k]
 
 
+# Per-pass buckets (M4). Names verified against a real Metal capture
+# (ue_project/Saved/Profiling/CSV/Profile(20260704_193105).csv): even with
+# -csvGpuStats, this UE 5.7 Mac/Metal build exposes NO "GPU/<pass>" columns —
+# the per-pass timing that actually exists is the render-thread exclusive
+# time per pass. That is what we bucket on. Notes:
+#   - gi_ms maps to Exclusive/RenderThread/RenderLighting: there is no
+#     dedicated Lumen/GI column in the capture; lighting composition (where
+#     Lumen's contribution lands on the render thread) is the closest real
+#     bucket. Do not invent a "Lumen" column.
+#   - Candidates are exact-match-first (find_stat), with the AllWorkers
+#     variant as fallback in case a future engine drops the RenderThread one.
+PASS_BUCKETS: dict[str, tuple[str, ...]] = {
+    "shadow_ms": (
+        "Exclusive/RenderThread/RenderShadows",
+        "Exclusive/AllWorkers/RenderShadows",
+    ),
+    "gi_ms": (
+        "Exclusive/RenderThread/RenderLighting",
+        "Exclusive/AllWorkers/RenderLighting",
+    ),
+    "post_ms": (
+        "Exclusive/RenderThread/RenderPostProcessing",
+        "Exclusive/AllWorkers/RenderPostProcessing",
+    ),
+    "base_ms": (
+        "Exclusive/RenderThread/RenderBasePass",
+        "Exclusive/AllWorkers/RenderBasePass",
+    ),
+    "translucency_ms": (
+        "Exclusive/RenderThread/RenderTranslucency",
+        "Exclusive/AllWorkers/RenderTranslucency",
+    ),
+}
+
+
+def per_pass_percentiles(
+    csv_path: str | Path, warmup_frames: int = 60, pct: float = 95
+) -> dict[str, float]:
+    """p95 (by default) of each per-pass bucket in PASS_BUCKETS, in ms.
+
+    A bucket that is genuinely absent from the capture is reported as NaN —
+    never silently 0.0, which would look like a free pass to the optimizer.
+    """
+    series = load_csv_stats(csv_path)
+    out: dict[str, float] = {}
+    for column, candidates in PASS_BUCKETS.items():
+        values = find_stat(series, *candidates)
+        trimmed = values[warmup_frames:] if len(values) > warmup_frames else values
+        out[column] = percentile(trimmed, pct) if trimmed else float("nan")
+    return out
+
+
 def frame_time_percentiles(
     csv_path: str | Path, warmup_frames: int = 60
 ) -> dict[str, float]:
