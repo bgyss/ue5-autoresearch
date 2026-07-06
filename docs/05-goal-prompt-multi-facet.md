@@ -172,6 +172,113 @@ M benchmark workers (local + cloud, one per GPU) → one shared, append-only led
 >
 > ---
 >
+> ### Cloud worker reality check (caveats the build must respect, with mitigations)
+>
+> Running headless UE5 on GPUs in K8s is a supported, proven path (`-RenderOffscreen
+> -Unattended`, cooked Linux build, NVIDIA device plugin / GPU Operator), but the build
+> must engineer around these known caveats rather than discover them at 3am:
+>
+> - **RHI divergence:** Linux workers render via Vulkan+NVIDIA; the Mac renders via
+>   Metal. Pass costs and even available features differ (Nanite works on Linux/Vulkan
+>   but not on the Mac). *Mitigation:* pin cloud workers to the exact feature flags of
+>   the primary (Mac) target via a checked-in `config/worker_parity.ini` that the worker
+>   applies before any candidate cvars, and have CI diff it against the Mac's effective
+>   config. Never let a facet exploit a feature the ship class lacks.
+> - **Driver capabilities:** the NVIDIA container toolkit defaults to `compute`; Vulkan
+>   rendering needs graphics/display caps. *Mitigation:* bake
+>   `NVIDIA_DRIVER_CAPABILITIES=all` into the pod spec and add a worker self-test
+>   (`vulkaninfo` + a 10-second known-scene render with a golden checksum) that runs at
+>   pod start and fails fast before claiming a job.
+> - **Weaker determinism than local:** thermals, GPU boost clocks, and noisy-neighbor
+>   CPU add variance. *Mitigations, in order of leverage:* (1) one instance type per
+>   `worker_class`, never mixed; (2) lock GPU clocks where the driver allows
+>   (`nvidia-smi -lgc`) and record the achieved clocks in the result row; (3) a warmup
+>   pass before measurement; (4) report median-of-3 short captures instead of one long
+>   capture, and log the spread — the queue auto-rejects rows whose intra-run spread
+>   exceeds the class's M0 tolerance; (5) prefer single-GPU instance types (full
+>   passthrough, e.g. g5/A10G, g6/L4) so the GPU is never shared.
+> - **Hung jobs hold GPUs:** set Job `activeDeadlineSeconds` (and a Kueue quota per
+>   class) so a wedged UE process releases capacity automatically; the queue requeues
+>   the job once on a fresh pod, then marks it failed.
+> - **Licensing:** engine container images derive from Epic's EULA-gated images — keep
+>   them in a private ECR, never public.
+>
+> 6. **M12 — build & image pipeline (make cloud workers cheap to create and update).**
+>    Right now the expensive artifact is the Linux-cooked build + container image.
+>    Build tooling so that iterating on the harness or scene never means hand-rebuilding
+>    a 30 GB image:
+>    - **Layered OCI images:** base = Epic runtime image; layer 2 = engine + project
+>      binaries; layer 3 = harness (tiny, changes often). Cooked *content* lives in S3,
+>      versioned by content hash, pulled at pod start — cvar-only experiments never
+>      rebuild or re-pull anything.
+>    - **CI cook:** a GitHub Actions (or Buildkite) job on a Linux runner that cooks
+>      `ue_project/` for Linux, uploads content to S3, builds/pushes the image to ECR,
+>      and stamps `worker_manifest.json` (image digest + content hash + parity-config
+>      hash) — the coordinator records that manifest in every result row so any number
+>      is traceable to exact bits. Use UBA/BuildGraph if engine compile times become
+>      the bottleneck.
+>    - **Fast pod cold-start:** enable lazy image pull (SOCI or eStargz on EKS) and keep
+>      a warm node while the queue is non-empty; target <5 min from job submit to first
+>      measured frame on a cold cluster.
+>    - **One-command bring-up/teardown:** `harness/cloud.py up|down` wrapping
+>      Terraform/eksctl + Kueue + Karpenter manifests checked into `infra/`, with the
+>      idle-timeout teardown from M8 wired in.
+>
+> ### Stretch goals (open research — do not build until the fleet is boring)
+>
+> - **Console / gaming-PC performance profiles.** The dream: `worker_class` profiles
+>   that stand in for real ship targets — PS5, Xbox Series X/S, Switch 2, Steam
+>   Machine/Deck, and low/medium/high gaming PCs — so the fleet verifies candidates
+>   against "will this hold 16.6ms on a PS5-class GPU", not just "faster on an A10G".
+>   Status: **mostly an open research question; treat it that way.**
+>   - *Gaming-PC proxies are tractable:* cloud SKUs approximate PC tiers by raw class
+>     (L4 ≈ upper-mid RTX desktop, A10G ≈ RTX 3070-ish, T4 ≈ low-end). Build calibrated
+>     profiles: run a fixed calibration suite on the cloud GPU and on one real
+>     reference PC per tier, fit a per-pass scaling vector (not one scalar —
+>     shadow/GI/post passes scale differently), and emit "predicted tier-X ms" with
+>     confidence intervals as synthetic `profile:pc-low/mid/high` columns derived from
+>     a real `worker_class` — clearly marked *estimates*, never keep/discard authority.
+>   - *Consoles are much harder:* PS5/Xbox are RDNA2 APUs with unified memory and
+>     console-specific compilers/APIs; no cloud SKU matches (cloud GPUs are
+>     overwhelmingly NVIDIA; no RDNA2-APU instances exist). Frequency-matched RDNA2
+>     desktop parts are the accepted industry *approximation*, but real numbers require
+>     devkits and NDA toolchains — out of scope here. Switch 2 (NVIDIA Ampere-derived,
+>     handheld clocks) is ironically the *most* cloud-approximable: a clock-limited
+>     small Ampere/Ada part is a plausible calibrated proxy — still unvalidated; flag
+>     as an experiment, not a promise.
+>   - *Open research question — physical console-proxy workers:* can a **local RDNA2
+>     box or a devkit** attached to the fleet as just another `worker_class` get
+>     "close enough" to console numbers? Two candidate paths, neither validated here:
+>     - **Devkits (the real thing, mostly closed off):** PS5/Xbox devkits give true
+>       numbers but require registered-developer NDAs, console-specific toolchains and
+>       UE console platform ports — plus their profilers can't legally feed an open
+>       results ledger. Only pursue if the project ever has a registered studio
+>       partner; otherwise treat as unavailable. (Partial exception: an Xbox Series
+>       console in Dev Mode is cheaply unlockable, but UE5 retail-Dev-Mode support is
+>       too limited for real benchmarking.)
+>     - **Frequency-matched RDNA2 desktop hardware (the pragmatic path):** this is the
+>       established industry approximation and fits the fleet natively. A used
+>       RX 6700 (36 CU, ~PS5 GPU config) or RX 6700 XT downclocked to ~2.23 GHz
+>       approximates PS5; RX 6800 (~52-60 CU region) capped appropriately approximates
+>       Series X; a real **Steam Deck** (RDNA2 APU) can literally be a worker for the
+>       Deck/handheld tier. Run them as physical Linux workers (`worker_class:
+>       rdna2-ps5proxy` etc.) with locked clocks via `rocm-smi`. Known error sources to
+>       quantify, not hand-wave: discrete VRAM vs console unified memory (favors the
+>       proxy on streaming-heavy scenes), Mesa RADV vs console compilers (different
+>       shader codegen), Windows/Linux driver overhead vs console thin APIs (console
+>       usually faster at equal TFLOPs — expect the proxy to be *pessimistic*, which
+>       is the safe direction for a frame-budget gate). Success criterion: proxy
+>       predicts published console benchmark deltas for known settings changes within
+>       run-to-run noise. Getting "close, with a measured error bar" looks achievable;
+>       getting exact does not — and close is all the fleet needs for a
+>       `profile:ps5-proxy` gate.
+>   - *Research framing:* the honest deliverable is a **cross-hardware performance
+>     transfer model** — learn, from the fleet's own multi-class ledger, how config
+>     deltas transfer between worker classes, and quantify prediction error per pass.
+>     If held-out prediction error drops below run-to-run noise, calibrated profiles
+>     graduate from stretch goal to milestone. Publishable if it works; fine if it
+>     doesn't — the per-class ledger already keeps the fleet honest.
+>
 > ### Later-stage milestones — deep instrumentation (defer until a larger token budget)
 >
 > These extend the mutable genome *below* cvars, to per-asset content. They need a more
