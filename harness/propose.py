@@ -343,6 +343,29 @@ def git_has_changes() -> bool:
     return bool(result.stdout.strip())
 
 
+def summarize_cvar_diff(old: dict[str, Any], new: dict[str, Any]) -> str:
+    """Build a short human-readable summary of what changed between two
+    cvars dicts, e.g. 'r.ScreenPercentage=100->85, +sg.FoliageQuality=3'."""
+    parts = []
+    for key in sorted(set(old) | set(new)):
+        old_val = old.get(key)
+        new_val = new.get(key)
+        if old_val == new_val:
+            continue
+        if key not in old:
+            parts.append(f"+{key}={new_val}")
+        elif key not in new:
+            parts.append(f"-{key}")
+        else:
+            parts.append(f"{key}={old_val}->{new_val}")
+    if not parts:
+        return "no cvar changes"
+    summary = ", ".join(parts)
+    if len(summary) > 200:
+        summary = summary[:197] + "..."
+    return summary
+
+
 def git_commit(message: str) -> None:
     # Only commit the file the loop is allowed to change; do not pull in
     # other workspace files (logs, CSVs, etc.) that may be untracked.
@@ -438,7 +461,8 @@ def run_one_iteration(
             "passed": None,
         }
 
-    git_commit("exp: scripted LLM proposal")
+    diff_summary = summarize_cvar_diff(candidate, new_cvars)
+    git_commit(f"exp: LLM proposal ({diff_summary})")
     ok, metrics = run_evaluate()
     passed = metrics.get("passed", False)
     p95_ms = metrics.get("p95_ms", float("inf"))
