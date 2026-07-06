@@ -2,30 +2,31 @@
 <!-- LinkedIn post — copy from the line below the horizontal rule -->
 ---
 
-I've been experimenting with applying Karpathy's autoresearch framework to a domain I care about: **Unreal Engine 5 graphics optimization**.
+What if an AI agent could tune an Unreal Engine 5 scene the way a researcher tunes a model - propose a change, run the experiment, keep it only if the numbers actually improve?
 
-The idea is straightforward. Karpathy's autoresearch reduces "AI doing research" to a tight, boring, measurable loop: a human writes goals in `program.md`, an agent edits a single mutable file, runs a time-boxed experiment, reads one number back, and keeps the change only if that number improved — forever.
+I built a small open-source harness around that idea, inspired by Karpathy's `autoresearch`.
 
-I applied the exact same shape to UE5 rendering:
+The loop is intentionally boring:
 
-- The **"genome"** is `config/candidate.cvars` — a set of console variables controlling shadow quality, screen percentage, global illumination, anti-aliasing, and more
-- The **"experiment"** is a deterministic benchmark flythrough that emits frame-time CSVs and a screenshot
-- The **"one number"** is a fitness score that rewards lower GPU frame time while penalizing visual quality loss (SSIM + perceptual diff)
-- The **loop** proposes a new config, benchmarks it, keeps the commit if p95 improved by >2% over the current best, and reverts otherwise — classic git branch hill-climbing
+- `program.md` defines the goal and keep/discard rules
+- `config/candidate.cvars` is the only mutable "genome"
+- a deterministic UE5 flythrough measures p95 frame time and captures a reference image
+- the evaluator rewards lower GPU frame time, but penalizes visual quality loss with SSIM + perceptual diff
+- if the candidate clears the improvement gate, it stays; otherwise it gets reverted
 
-Two modes to run it:
+So the agent cannot win by turning everything off. It has to find settings that are faster without obviously looking worse.
 
-1. **Script-driven:** `harness/propose.py` calls a local LLM (llama.cpp, Ollama, or any OpenAI-compatible server) to edit the cvars file, runs the evaluator, and commits or reverts automatically.
-2. **Agent-driven (the autoresearch way):** point Claude Code (or any coding agent) at `program.md` and let it own the loop directly.
+It runs two ways:
 
-The whole thing runs locally on Apple Silicon — sequential LLM proposal then UE5 benchmark, so you're never running both at full tilt simultaneously.
+1. `harness/propose.py` can drive the loop with any local OpenAI-compatible LLM server, including llama.cpp or Ollama.
+2. A coding agent can own the loop directly by following `program.md`.
 
-There's also a **mock demo mode** (`UE5AR_MOCK=1`) that swaps the real benchmark for an analytic cost model with realistic noise — so anyone can try the full autoresearch loop with just Python, no Unreal Engine installation required.
+There is also a mock mode (`UE5AR_MOCK=1`) that swaps Unreal for a noisy analytic cost model, so you can try the full loop with just Python.
 
-The hardest part isn't the loop. It's the evaluator — measuring "faster without looking worse" honestly. That's true in ML research too, and it's the core insight AlphaEvolve's authors kept emphasizing.
+The part I find most interesting: the LLM is not the source of truth. The evaluator is. That feels like the useful pattern for a lot of agentic engineering work - give the model a narrow search space, a real measurement harness, and a ruthless keep/discard gate.
 
-Repo is on GitHub: **ue5-autoresearch**
+Repo: **ue5-autoresearch**
 
-If you're interested in autonomous optimization loops, local LLMs, or UE5 rendering, happy to chat.
+If you are working on autonomous optimization loops, local LLMs, or UE rendering, I would be curious to compare notes.
 
 #UnrealEngine #GameDev #MachineLearning #AI #GraphicsOptimization #LocalLLM #OpenSource
